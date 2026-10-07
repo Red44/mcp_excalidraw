@@ -35,6 +35,7 @@ import {
   duplicateElements
 } from './geometry.js';
 import { buildSceneFile, importScene } from './scene-io.js';
+import { clusterScene } from './cluster.js';
 import { wrapSceneAsObsidianMd } from './obsidian-md.js';
 import { describeScene } from './describe.js';
 import { exportToExcalidrawUrl } from './share-url.js';
@@ -566,6 +567,97 @@ export async function callExcalidrawTool(
             text: params.format === 'svg'
               ? result.data
               : `Base64 ${params.format} data (${result.data.length} chars, ${details}). Use filePath to save to disk.`
+          }]
+        };
+      }
+      case 'split_scene': {
+        const params = z.object({
+          outputDir: z.string(),
+          margin: z.number().optional(),
+          minElements: z.number().optional(),
+          formats: z.array(z.enum(['excalidraw', 'png'])).optional(),
+          scale: z.number().optional(),
+          padding: z.number().optional()
+        }).parse(args);
+
+        logger.info('Splitting scene via MCP', { margin: params.margin, minElements: params.minElements });
+
+        const allElements = await getElements();
+        const clusters = clusterScene(allElements, {
+          margin: params.margin,
+          minElements: params.minElements
+        });
+        if (clusters.length === 0) {
+          return {
+            content: [{
+              type: 'text',
+              text: 'No clusters found: the canvas is empty or every group is smaller than minElements.'
+            }]
+          };
+        }
+
+        const formats = params.formats ?? ['excalidraw', 'png'];
+        const safeDir = sanitizeFilePath(params.outputDir);
+        fs.mkdirSync(safeDir, { recursive: true });
+
+        // Files referenced by image elements, so each part stays standalone.
+        let filesById: Record<string, any> = {};
+        if (formats.includes('excalidraw')) {
+          try {
+            const filesResponse = await fetch(`${EXPRESS_SERVER_URL}/api/files`);
+            const filesJson = await filesResponse.json() as { files?: Record<string, any> };
+            filesById = filesJson.files ?? {};
+          } catch (error) {
+            logger.warn('Could not fetch image files for split parts:', (error as Error).message);
+          }
+        }
+
+        const byId = new Map(allElements.map(el => [String(el.id), el]));
+        const lines: string[] = [];
+        for (const cluster of clusters) {
+          const members = cluster.elementIds.map(id => byId.get(id)).filter(Boolean) as Array<Record<string, any>>;
+          const base = `${safeDir}/${cluster.name}`;
+
+          if (formats.includes('excalidraw')) {
+            const referencedFiles: Record<string, any> = {};
+            for (const el of members) {
+              const fileId = el.fileId;
+              if (typeof fileId === 'string' && filesById[fileId]) referencedFiles[fileId] = filesById[fileId];
+            }
+            const sceneFile = {
+              type: 'excalidraw',
+              version: 2,
+              source: 'mcp-excalidraw-server',
+              elements: members,
+              appState: { viewBackgroundColor: '#ffffff' },
+              files: referencedFiles
+            };
+            fs.writeFileSync(`${base}.excalidraw`, JSON.stringify(sceneFile, null, 2), 'utf-8');
+          }
+
+          let pngDetail = '';
+          if (formats.includes('png')) {
+            const image = await exportImage({
+              format: 'png',
+              elementIds: cluster.elementIds,
+              scale: params.scale ?? 2,
+              padding: params.padding ?? 40
+            });
+            fs.writeFileSync(`${base}.png`, Buffer.from(image.data, 'base64'));
+            pngDetail = `, ${image.width}x${image.height}px png`;
+          }
+
+          const b = cluster.bounds;
+          lines.push(
+            `- ${cluster.name}: ${cluster.count} elements, ` +
+            `bounds x${Math.round(b.x1)}..${Math.round(b.x2)} y${Math.round(b.y1)}..${Math.round(b.y2)}${pngDetail}`
+          );
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text: `Split the canvas into ${clusters.length} part(s) under ${safeDir}:\n${lines.join('\n')}`
           }]
         };
       }

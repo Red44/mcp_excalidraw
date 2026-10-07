@@ -391,6 +391,41 @@ export const tools: Tool[] = [
     }
   },
   {
+    name: 'split_scene',
+    description: 'Detect spatially disjoint sub-drawings on the canvas (connected components over element bounding boxes with a gap tolerance) and export each as its own files: a standalone .excalidraw JSON and/or a PNG render of just that part. Useful when one canvas holds several unrelated drawings or pasted iterations.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outputDir: {
+          type: 'string',
+          description: 'Directory to write the per-cluster files into (created if missing, must stay within the allowed base directory)'
+        },
+        margin: {
+          type: 'number',
+          description: 'Gap tolerance in px: elements whose boxes come this close are grouped (default: 250)'
+        },
+        minElements: {
+          type: 'number',
+          description: 'Clusters with fewer elements are ignored as noise (default: 5)'
+        },
+        formats: {
+          type: 'array',
+          items: { type: 'string', enum: ['excalidraw', 'png'] },
+          description: 'Output formats per cluster (default: both)'
+        },
+        scale: {
+          type: 'number',
+          description: 'PNG scale 1..4 (default: 2)'
+        },
+        padding: {
+          type: 'number',
+          description: 'Padding around each rendered part in px (default: 40)'
+        }
+      },
+      required: ['outputDir']
+    }
+  },
+  {
     name: 'duplicate_elements',
     description: 'Duplicate elements with a configurable offset',
     inputSchema: {
